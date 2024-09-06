@@ -4,10 +4,7 @@ import torch.nn.functional as F
 from transformers import GPT2Config, GPT2Model
 from utils import convert_to_tensor
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def get_activation(activation="relu"):
@@ -20,8 +17,15 @@ def get_activation(activation="relu"):
 
 
 class DecoderTransformerBackbone(nn.Module):
-    def __init__(self, config, activation="relu",
-                 normalize_attn=True, mlp=True, layernorm=True, positional_embedding=True):
+    def __init__(
+        self,
+        config,
+        activation="relu",
+        normalize_attn=True,
+        mlp=True,
+        layernorm=True,
+        positional_embedding=True,
+    ):
         super(DecoderTransformerBackbone, self).__init__()
         self.n_positions = config.n_positions
         self.n_embd = config.n_embd
@@ -63,11 +67,13 @@ class DecoderTransformerBackbone(nn.Module):
             self.mask = torch.zeros(1, self.n_positions, self.n_positions)
             for i in range(self.n_positions):
                 if self.normalize_attn:
-                    self.mask[0, i, :(i+1)].fill_(1./(i+1))
+                    self.mask[0, i, : (i + 1)].fill_(1.0 / (i + 1))
                 else:
-                    self.mask[0, i, :(i+1)].fill_(1.)
+                    self.mask[0, i, : (i + 1)].fill_(1.0)
 
-    def forward(self, inputs_embeds=None, position_ids=None, return_hidden_states=False):
+    def forward(
+        self, inputs_embeds=None, position_ids=None, return_hidden_states=False
+    ):
         assert inputs_embeds is not None
 
         hidden_states = []
@@ -77,24 +83,32 @@ class DecoderTransformerBackbone(nn.Module):
         if self.positional_embedding:
             if position_ids is None:
                 input_shape = H.size()[:-1]
-                position_ids = torch.arange(input_shape[-1], dtype=torch.long, device=H.device)
+                position_ids = torch.arange(
+                    input_shape[-1], dtype=torch.long, device=H.device
+                )
                 position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
             position_embeds = self.wpe(position_ids)
             H = H + position_embeds
         hidden_states.append(H)
 
-        for (q, k, v, ln1, mlp, ln2) in zip(
-                self._queries, self._keys, self._values,
-                self._lns_1, self._mlps, self._lns_2,
+        for q, k, v, ln1, mlp, ln2 in zip(
+            self._queries,
+            self._keys,
+            self._values,
+            self._lns_1,
+            self._mlps,
+            self._lns_2,
         ):
             query = q(H)
             key = k(H)
             value = v(H)
 
             # compute attention weights
-            attn_weights = self.activation(torch.einsum('bid,bjd->bij', query, key)) * self.mask[:, :N, :N].to(H.device)
+            attn_weights = self.activation(
+                torch.einsum("bid,bjd->bij", query, key)
+            ) * self.mask[:, :N, :N].to(H.device)
 
-            H = H + torch.einsum('bij,bjd->bid', attn_weights, value)
+            H = H + torch.einsum("bij,bjd->bid", attn_weights, value)
             if self.layernorm:
                 H = ln1(H)
 
@@ -110,13 +124,6 @@ class DecoderTransformerBackbone(nn.Module):
         return H
 
 
-
-
-
-
-
-
-
 class Transformer(nn.Module):
     """Transformer class."""
 
@@ -124,133 +131,113 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
 
         self.config = config
-        self.test = config['test']
-        self.horizon = self.config['horizon']
-        self.n_embd = self.config['n_embd']
-        self.n_layer = self.config['n_layer']
-        self.n_head = self.config['n_head']
-        self.state_dim = self.config['state_dim']
-        self.action_dim = self.config['action_dim']
-        self.dropout = self.config['dropout']
-        
-        self.act_num= self.config['act_num']
-        self.dim= self.config['dim']
-        self.act_type=self.config['act_type']
+        self.test = config["test"]
+        self.horizon = self.config["horizon"]
+        self.n_embd = self.config["n_embd"]
+        self.n_layer = self.config["n_layer"]
+        self.n_head = self.config["n_head"]
+        self.state_dim = self.config["state_dim"]
+        self.action_dim = self.config["action_dim"]
+        self.dropout = self.config["dropout"]
 
-
+        self.act_num = self.config["act_num"]
+        self.dim = self.config["dim"]
+        self.act_type = self.config["act_type"]
 
         config = GPT2Config(
             n_positions=4 * (1 + self.horizon),
             n_embd=self.n_embd,
             n_layer=self.n_layer,
-            n_head=self.n_head,     ##previously 1
+            n_head=self.n_head,  ##previously 1
             resid_pdrop=self.dropout,
             embd_pdrop=self.dropout,
             attn_pdrop=self.dropout,
             use_cache=False,
         )
-        if self.act_type=='relu':
+        if self.act_type == "relu":
             self.transformer = DecoderTransformerBackbone(config)
         else:
             self.transformer = GPT2Model(config)
-            
 
         self.embed_transition = nn.Linear(
-            3+ self.dim*self.act_num+self.action_dim, self.n_embd)
-        
-        
-#         self.embed_transition = nn.Linear(
-#             3+ self.action_dim, self.n_embd)    ## used for dpt test exp
-        
-        
-        
-        
+            3 + self.dim * self.act_num + self.action_dim, self.n_embd
+        )
+
+        #         self.embed_transition = nn.Linear(
+        #             3+ self.action_dim, self.n_embd)    ## used for dpt test exp
+
         self.pred_actions = nn.Linear(self.n_embd, self.action_dim)
 
     def forward(self, x):
-        
-        
-        
-        query_states = x['query_states'][:, None, :]
-  
+
+        query_states = x["query_states"][:, None, :]
+
         if self.test:
-            batch_size=1
+            batch_size = 1
         else:
-            batch_size=x['action_set'].size(dim=0)
-        
-        
-        current_horizon=x['context_actions'].size(dim=1)
-        
-        action_set_seq=x['action_set']
-        
-      
+            batch_size = x["action_set"].size(dim=0)
+
+        current_horizon = x["context_actions"].size(dim=1)
+
+        action_set_seq = x["action_set"]
+
         if self.test:
-            action_set_seq=convert_to_tensor(action_set_seq)
-        
-        
-        action_set_seq_0 = action_set_seq.reshape(batch_size,1,-1)
+            action_set_seq = convert_to_tensor(action_set_seq)
+
+        action_set_seq_0 = action_set_seq.reshape(batch_size, 1, -1)
         zero_action_set = torch.zeros_like(action_set_seq_0)
-        action_set_seq=torch.cat([action_set_seq_0,zero_action_set],axis=1)
-        action_set_seq=action_set_seq.repeat(1,current_horizon,1)
-        
-        action_seq=torch.zeros((batch_size,2*current_horizon,self.action_dim+1),device=device)              
-        
-            ##odd numbers for the action set, even numbers for action actions & rewards
-        
-        
-        action_seq[:,1::2,:]=torch.cat([x['context_actions'],x['context_rewards']],dim=2)
-        one_seq=torch.ones((batch_size,2*current_horizon,1),device=device)
-        pos_seq=torch.arange(1,2*current_horizon+1,dtype=torch.float32, device=device)
-        pos_seq=pos_seq.reshape(1,-1,1).repeat(batch_size,1,1)
-        
-        
-        
-        seq=torch.cat([action_set_seq,action_seq,one_seq,pos_seq],dim=2)
-        
-        #seq=torch.cat([action_seq,one_seq,pos_seq],dim=2)    ##dpt test exp
+        action_set_seq = torch.cat([action_set_seq_0, zero_action_set], axis=1)
+        action_set_seq = action_set_seq.repeat(1, current_horizon, 1)
 
+        action_seq = torch.zeros(
+            (batch_size, 2 * current_horizon, self.action_dim + 1), device=device
+        )
 
-        
+        ##odd numbers for the action set, even numbers for action actions & rewards
+
+        action_seq[:, 1::2, :] = torch.cat(
+            [x["context_actions"], x["context_rewards"]], dim=2
+        )
+        one_seq = torch.ones((batch_size, 2 * current_horizon, 1), device=device)
+        pos_seq = torch.arange(
+            1, 2 * current_horizon + 1, dtype=torch.float32, device=device
+        )
+        pos_seq = pos_seq.reshape(1, -1, 1).repeat(batch_size, 1, 1)
+
+        seq = torch.cat([action_set_seq, action_seq, one_seq, pos_seq], dim=2)
+
+        # seq=torch.cat([action_seq,one_seq,pos_seq],dim=2)    ##dpt test exp
+
         if self.test:
-            action_set_seq_test=torch.zeros((seq.size(dim=0),1,seq.size(dim=2)),device=device)
-            
-            
-            action_set_seq_test[:,:,:action_set_seq_0.size(dim=2)]=torch.clone(action_set_seq_0)       ## not run when doing dpt test exp
-            
-            
-            
-            
-            
-           
-            action_set_seq_test[:,:,-2]=torch.ones_like(action_set_seq_test[:,:,-2])
-            action_set_seq_test[:,:,-1]=(1+2*current_horizon)*torch.ones_like(action_set_seq_test[:,:,-1])
+            action_set_seq_test = torch.zeros(
+                (seq.size(dim=0), 1, seq.size(dim=2)), device=device
+            )
 
+            action_set_seq_test[:, :, : action_set_seq_0.size(dim=2)] = torch.clone(
+                action_set_seq_0
+            )  ## not run when doing dpt test exp
 
-            
-           
-            seq=torch.cat([seq,action_set_seq_test],axis=1)
-            
-        
-        
+            action_set_seq_test[:, :, -2] = torch.ones_like(
+                action_set_seq_test[:, :, -2]
+            )
+            action_set_seq_test[:, :, -1] = (1 + 2 * current_horizon) * torch.ones_like(
+                action_set_seq_test[:, :, -1]
+            )
+
+            seq = torch.cat([seq, action_set_seq_test], axis=1)
 
         stacked_inputs = self.embed_transition(seq)
-        
-        
+
         transformer_outputs = self.transformer(inputs_embeds=stacked_inputs)
-        
-        
-        if self.act_type=='relu':
-            preds = self.pred_actions(transformer_outputs)    ## for relu
-        
+
+        if self.act_type == "relu":
+            preds = self.pred_actions(transformer_outputs)  ## for relu
+
         else:
-            preds = self.pred_actions(transformer_outputs['last_hidden_state'])   ##for gpt2
+            preds = self.pred_actions(
+                transformer_outputs["last_hidden_state"]
+            )  ##for gpt2
 
         if self.test:
-            return preds[:, -1, :]   
-        return preds[:,0::2,:]   ##get the odd layers
-
-
-
-
-
-
+            return preds[:, -1, :]
+        return preds[:, 0::2, :]  ##get the odd layers
